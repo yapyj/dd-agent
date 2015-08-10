@@ -2,7 +2,7 @@
 # tornado can work without pycurl and use the simple http client
 # but some features won't work, like the abylity to use a proxy
 # Require a compiler and the curl headers+lib
-# On windows - manual install of pycurl might be easier. 
+# On windows - manual install of pycurl might be easier.
 pycurl==7.19.5.1
 
 # core-ish/system -> system check on windows
