@@ -5,7 +5,6 @@ import sys
 
 # 3p
 from setuptools import setup
-from requests.certs import where
 
 # project
 from config import get_version
@@ -33,11 +32,19 @@ if sys.platform == 'win32':
 
     # Modules to force-include in the exe
     include_modules = [
+        # stdlib
+        'os',
+        'time',
+
         # 3p
         'wmi',
+        'psutil',
+        'win32api',
+        'subprocess',
         'win32service',
         'win32serviceutil',
         'win32event',
+        'servicemanager',
     ]
 
     class Target(object):
