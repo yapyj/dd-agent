@@ -67,7 +67,7 @@ def add_serialization_status_metric(status, hostname):
     value = 1
     return {
         'tags': ["status:{0}".format(status)],
-        'metric': 'datadog.dogstatsd.serialization_failure',
+        'metric': 'datadog.dogstatsd.serialization_status',
         'interval': interval,
         'device_name': None,
         'host': hostname,
