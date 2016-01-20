@@ -6,6 +6,9 @@ import socket
 import sys
 import time
 
+# 3p
+import simplejson as json
+
 # project
 from checks import AGENT_METRICS_CHECK_NAME, AgentCheck, create_service_check
 from checks.check_status import (
@@ -18,7 +21,6 @@ from checks.check_status import (
 from checks.datadog import DdForwarder, Dogstreams
 from checks.ganglia import Ganglia
 from config import get_system_stats, get_version
-from resources.processes import Processes as ResProcesses
 import checks.system.unix as u
 import checks.system.win32 as w32
 import checks.system.common as common
@@ -41,6 +43,16 @@ log = logging.getLogger(__name__)
 FLUSH_LOGGING_PERIOD = 10
 FLUSH_LOGGING_INITIAL = 5
 DD_CHECK_TAG = 'dd_check:{0}'
+
+PROCESSES_FORMAT_DESCRIPTION = [
+    [2, "user", "str", "append", "append", "append", "append", False, False],
+    [2, "pct_cpu", "float", "sum", "avg", "sum", "avg", False, False],
+    [2, 'pct_mem', 'float', 'sum', 'avg', 'sum', 'avg', False, False],
+    [2, 'vsz', 'int', 'sum', 'avg', 'sum', 'avg', False, False],
+    [2, 'rss', 'int', 'sum', 'avg', 'sum', 'avg', False, False],
+    [2, 'family', 'str', None, None, 'append', 'append', True, True],
+    [2, 'ps_count', 'int', 'sum', 'avg', 'sum', 'avg', False, False],
+]
 
 
 class AgentPayload(collections.MutableMapping):
@@ -174,6 +186,10 @@ class Collector(object):
                 'start': time.time(),
                 'interval': int(agentConfig.get('agent_checks_interval', 10 * 60))
             },
+            'processes': {
+                'start': time.time(),
+                'interval': int(agentConfig.get('processes_interval', 60))
+            }
         }
         socket.setdefaulttimeout(15)
         self.run_count = 0
@@ -223,10 +239,8 @@ class Collector(object):
             except Exception:
                 log.exception('Unable to load custom check module %s' % module_spec)
 
-        # Resource Checks
-        self._resources_checks = [
-            ResProcesses(log, self.agentConfig)
-        ]
+        # Resource Checks (deprecated)
+        self._resources_checks = []
 
     def stop(self):
         """
@@ -377,6 +391,27 @@ class Collector(object):
                         payload['resources'][resources_check.RESOURCE_KEY] = res_value
                 except Exception:
                     log.exception("Error running resource check %s" % resources_check.RESOURCE_KEY)
+
+            if self._should_send_additional_data('processes'):
+                try:
+                    gops_data, gops_err, _ = get_subprocess_output(["gops"], log)
+                    if gops_err:
+                        log.warning("GOPS LOG | {0}".format(gops_err))
+                    processes_payload = {
+                        'snaps': [json.loads(gops_data)],
+                        'format_version': 1
+                    }
+                    if self._is_first_run():
+                        processes_payload['format_description'] = PROCESSES_FORMAT_DESCRIPTION
+                    payload['resources']['processes'] = processes_payload
+                    has_resource = True
+                except OSError as e:
+                    if e.errno == 2:  # file not found, expected when install from source
+                        log.info("gops file not found")
+                    else:
+                        raise e
+                except Exception as e:
+                    log.warning("gops command failed with error %s" % str(e))
 
             if has_resource:
                 payload['resources']['meta'] = {
