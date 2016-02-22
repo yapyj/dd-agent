@@ -5,6 +5,8 @@ Collects metrics from cAdvisor instance
 import numbers
 from fnmatch import fnmatch
 import re
+import simplejson as json
+from collections import defaultdict
 
 # 3rd party
 import requests
@@ -220,6 +222,9 @@ class Kubernetes(AgentCheck):
     def _retrieve_kube_labels(self):
         return get_kube_labels()
 
+    def _retrieve_pods_list(self):
+        kube_settings = get_kube_settings()
+        return retrieve_json(kube_settings["pods_list_url"])
 
     def _update_metrics(self, instance, kube_settings):
         metrics = self._retrieve_metrics(kube_settings["metrics_url"])
@@ -233,3 +238,27 @@ class Kubernetes(AgentCheck):
             except Exception, e:
                 self.log.error("Unable to collect metrics for container: {0} ({1}".format(
                     subcontainer.get('name'), e))
+
+        pods_list = self._retrieve_pods_list()
+        self._update_pods_metrics(instance, pods_list)
+
+    def _update_pods_metrics(self, instance, pods):
+        controllers_map = defaultdict(list)
+        for pod in pods['items']:
+            node_name = pod['spec']['nodeName']
+            try:
+                created_by = json.loads(pod['metadata']['annotations']['kubernetes.io/created-by'])
+                if created_by['reference']['kind'] == 'ReplicationController':
+                    controllers_map[created_by['reference']['name']].append(node_name)
+            except KeyError:
+                continue
+
+        tags = instance.get('tags', [])
+        for ctrl, pods in controllers_map.iteritems():
+            _tags = tags[:]  # copy base tags
+            _tags.append('kube_replication_controller:{0}'.format(ctrl))
+            # at the moment kubelet api reports data only for the current node,
+            # we expect exactly one item in the set.
+            for node_name in set(pods):
+                _tags.append('node_name:{0}'.format(node_name))
+            self.publish_gauge(self, NAMESPACE + '.pods.running', len(pods), _tags)
