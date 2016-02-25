@@ -37,6 +37,7 @@ SUPERVISOR_CONF="/etc/dd-agent/supervisor.conf"
 SUPERVISOR_SOCK="/opt/datadog-agent/run/datadog-supervisor.sock"
 SUPERVISOR_PIDFILE="/opt/datadog-agent/run/datadog-supervisord.pid"
 COLLECTOR_PIDFILE="/opt/datadog-agent/run/dd-agent.pid"
+DD_OPT_PROC_REGEX="dogstatsd|jmxfetch|go-metro"
 
 # Source function library.
 . /etc/rc.d/init.d/functions
@@ -51,11 +52,18 @@ check_status() {
         s=`$SUPERVISORCTL_PATH -c $SUPERVISOR_CONF status`
 
         # number of RUNNING supervisord programs (ignoring dogstatsd, jmxfetch and go-metro)
-	p=`echo "$s" | grep -Ev 'dogstatsd|jmxfetch|go-metro' | grep -c RUNNING`
+        p=`echo "$s" | grep -Ev $DD_OPT_PROC_REGEX | grep -c RUNNING`
+
+        # Number of non-failed OPTIONAL supervisord programs (dogstatsd, jmxfetch and go-metro)
+        p_o=`echo "$s" | grep -E $DD_OPT_PROC_REGEX | grep -c FATAL`
 
         # number of expected running supervisord programs (ignoring dogstatsd and jmxfetch)
-	c=`grep -Ev 'dogstatsd|jmxfetch|go-metro' $SUPERVISOR_CONF | grep -c '\[program:'`
-        if [ "$p" -ne "$c" ]; then
+        c=`grep -Ev $DD_OPT_PROC_REGEX $SUPERVISOR_CONF | grep -c '\[program:'`
+
+        # Number of expected optional supervisord programs (dogstatsd, jmxfetch and go-metro)
+        c_o=`grep -E $DD_OPT_PROC_REGEX $SUPERVISOR_CONF | grep -c '\[program:'`
+
+        if [ "$p" -ne "$c" ] || [ "$p_o" -ne "$c_o" ]; then
             echo "$s"
             echo -n "Datadog Agent (supervisor) is NOT running all child processes"; failure; echo
             return 1

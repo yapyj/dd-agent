@@ -61,7 +61,7 @@ check_status() {
         supervisor_config_programs=$(grep -Ev $DD_OPT_PROC_REGEX $SUPERVISOR_FILE |
                                      grep -c '\[program:')
 
-        # Number of expected running supervisord programs (ignoring dogstatsd, jmxfetch and go-metro)
+        # Number of expected optional supervisord programs (dogstatsd, jmxfetch and go-metro)
         supervisor_config_opt_programs=$(grep -E $DD_OPT_PROC_REGEX $SUPERVISOR_FILE |
                                      grep -c '\[program:')
 
