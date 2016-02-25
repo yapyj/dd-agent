@@ -28,6 +28,7 @@ SUPERVISORCTL_PATH="/opt/datadog-agent/bin/supervisorctl"
 SUPERVISORD_PATH="/opt/datadog-agent/bin/supervisord"
 COLLECTOR_PIDFILE="/opt/datadog-agent/run/dd-agent.pid"
 SYSTEM_PATH=/opt/datadog-agent/embedded/bin:/opt/datadog-agent/bin:$PATH
+DD_OPT_PROC_REGEX="dogstatsd|jmxfetch|go-metro"
 
 if [ ! -x $AGENTPATH ]; then
     echo "$AGENTPATH not found. Exiting."
@@ -46,22 +47,22 @@ check_status() {
 
         # Number of RUNNING supervisord programs (ignoring dogstatsd, jmxfetch and go-metro)
         datadog_supervisor_processes=$(echo "$supervisor_processes" |
-                                       grep -Ev 'dogstatsd|jmxfetch|go-metro' |
+                                       grep -Ev $DD_OPT_PROC_REGEX |
                                        grep $NAME |
                                        grep -c RUNNING)
 
         # Number of non-failed OPTIONAL supervisord programs (dogstatsd, jmxfetch and go-metro)
         datadog_supervisor_opt_processes=$(echo "$supervisor_processes" |
-                                       grep -E 'dogstatsd|jmxfetch|go-metro' |
+                                       grep -E $DD_OPT_PROC_REGEX |
                                        grep $NAME |
-                                       grep -cv FAILED)
+                                       grep -cv FATAL)
 
         # Number of expected running supervisord programs (ignoring dogstatsd, jmxfetch and go-metro)
-        supervisor_config_programs=$(grep -Ev 'dogstatsd|jmxfetch|go-metro' $SUPERVISOR_FILE |
+        supervisor_config_programs=$(grep -Ev $DD_OPT_PROC_REGEX $SUPERVISOR_FILE |
                                      grep -c '\[program:')
 
         # Number of expected running supervisord programs (ignoring dogstatsd, jmxfetch and go-metro)
-        supervisor_config_opt_programs=$(grep -E 'dogstatsd|jmxfetch|go-metro' $SUPERVISOR_FILE |
+        supervisor_config_opt_programs=$(grep -E $DD_OPT_PROC_REGEX $SUPERVISOR_FILE |
                                      grep -c '\[program:')
 
         if [ "$datadog_supervisor_processes" -ne "$supervisor_config_programs" ] ||
