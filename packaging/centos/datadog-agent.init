@@ -45,6 +45,16 @@ DD_OPT_PROC_REGEX="dogstatsd|jmxfetch|go-metro"
 
 check_status() {
     # run checks to determine if the service is running or use generic status
+    QUERY="all"
+    if [ -n "$1" ] && [ "$1" != "all" ] && [ "$1" != "essential" ] && [ "$1" != "optional" ]; then
+        echo "Valid arguments for $0: all | essential | optional"
+    elif [ -n "$1" ]; then
+        QUERY=$1
+    fi
+
+    ESSENTIAL=0
+    OPTIONAL=0
+    FAIL=1
 
     # if the sock exists, we can use supervisorctl
     if [ -e $SUPERVISOR_SOCK ]; then
@@ -63,7 +73,24 @@ check_status() {
         # Number of expected optional supervisord programs (dogstatsd, jmxfetch and go-metro)
         c_o=`grep -E $DD_OPT_PROC_REGEX $SUPERVISOR_CONF | grep -c '\[program:'`
 
-        if [ "$p" -ne "$c" ] || [ "$p_o" -ne "$c_o" ]; then
+        if [ "$p" -ne "$c" ]; then
+            ESSENTIAL=1
+
+        fi
+
+        if [ "$p_o" -ne "$c_o" ]; then
+            OPTIONAL=1
+        fi
+
+        if [ "$QUERY" = "essential" ] && [ "$ESSENTIAL" -eq 0 ]; then
+            FAIL=0
+        elif [ "$QUERY" = "optional" ] && [ "$OPTIONAL" -eq 0 ]; then
+            FAIL=0
+        elif [ "$QUERY" = "all" ] && [ "$ESSENTIAL" = "$OPTIONAL" ] && [ $ESSENTIAL -eq 0 ]; then
+            FAIL=0
+        fi
+
+        if [ "$FAIL" -gt 0 ]; then
             echo "$s"
             echo -n "Datadog Agent (supervisor) is NOT running all child processes"; failure; echo
             return 1
