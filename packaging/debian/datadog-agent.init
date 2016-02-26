@@ -121,6 +121,8 @@ case "$1" in
         if [ $? -eq 0 ]; then
             echo "$DESC is already running"
             exit 0
+        else
+            $0 stop > /dev/null 2>&1
         fi
 
         su $AGENTUSER -c "$AGENTPATH configcheck" > /dev/null
@@ -155,7 +157,6 @@ case "$1" in
         exit 1
         ;;
     stop)
-
         log_daemon_msg "Stopping $DESC (stopping supervisord)" "$NAME"
         start-stop-daemon --stop --retry 30 --quiet --oknodo --pidfile $SUPERVISOR_PIDFILE
 
