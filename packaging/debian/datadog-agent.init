@@ -36,6 +36,18 @@ if [ ! -x $AGENTPATH ]; then
 fi
 
 check_status() {
+
+    QUERY="all"
+    if [ -n "$1" ] && [ "$1" != "all" ] && [ "$1" != "essential" ] && [ "$1" != "optional" ]; then
+        echo "Valid arguments for $0: all | essential | optional"
+    elif [ -n "$1" ]; then
+        QUERY=$1
+    fi
+
+    ESSENTIAL=0
+    OPTIONAL=0
+    FAIL=1
+
     # If the socket exists, we can use supervisorctl
     if [ -e $SUPERVISOR_SOCK ]; then
         # If we're using supervisor, check the number of datadog processes
@@ -65,8 +77,23 @@ check_status() {
         supervisor_config_opt_programs=$(grep -E $DD_OPT_PROC_REGEX $SUPERVISOR_FILE |
                                      grep -c '\[program:')
 
-        if [ "$datadog_supervisor_processes" -ne "$supervisor_config_programs" ] ||
-           [ "$datadog_supervisor_opt_processes" -ne "$supervisor_config_opt_programs" ]  ; then
+        if [ "$datadog_supervisor_processes" -ne "$supervisor_config_programs" ]; then
+            ESSENTIAL=1
+        fi
+
+        if [ "$datadog_supervisor_opt_processes" -ne "$supervisor_config_opt_programs" ]  ; then
+            OPTIONAL=1
+        fi
+
+        if [ "$QUERY" = "essential" ] && [ "$ESSENTIAL" -eq 0 ]; then
+            FAIL=0
+        elif [ "$QUERY" = "optional" ] && [ "$OPTIONAL" -eq 0 ]; then
+            FAIL=0
+        elif [ "$QUERY" = "all" ] && [ "$ESSENTIAL" = "$OPTIONAL" ] && [ $ESSENTIAL -eq 0 ]; then
+            FAIL=0
+        fi
+
+        if [ "$FAIL" -gt 0 ]; then
             echo "$supervisor_processes"
             echo "$DESC (supervisor) is NOT running all child processes"
             return 1
@@ -74,6 +101,8 @@ check_status() {
             echo "$DESC (supervisor) is running all child processes"
             return 0
         fi
+
+
     else
         echo "$DESC (supervisor) is not running"
         return 1
@@ -88,7 +117,7 @@ case "$1" in
             exit 3
         fi
 
-        check_status > /dev/null
+        check_status essential > /dev/null
         if [ $? -eq 0 ]; then
             echo "$DESC is already running"
             exit 0
