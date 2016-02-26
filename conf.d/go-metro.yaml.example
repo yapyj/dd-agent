@@ -25,7 +25,7 @@ instances:
   hosts:                      # Whitelist by hostname - will perform ip lookup and filter by hosts ip's
     - somehost.somedomain.to  # <---SAMPLE HOST, SET YOUR OWN LIST.
 
-                              # NOTE: Whitelisting with ips and hosts is *highly* recommended to avoid having
+                              # NOTE: Whitelisting with ips and hosts is *MANDATAORY*. We want to avoid having
                               #      go-metro inspect every incoming/outgoing packet through the interface.
                               #      Under high network load circumstances, the performance impact would not be
                               #      negligible and could consume valuable CPU/memory resources. Please ensure
