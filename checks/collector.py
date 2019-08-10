@@ -30,25 +30,37 @@ from checks.check_status import (
 )
 from checks.datadog import Dogstreams
 from checks.ganglia import Ganglia
-from config import get_system_stats, get_version
+from config import (
+    A7_COMPATIBILITY_ATTR,
+    A7_COMPATIBILITY_READY,
+    AGENT_VERSION,
+    get_system_stats,
+    get_version,
+)
 import checks.system.unix as u
 import checks.system.win32 as w32
 import modules
 from util import get_uuid
 from utils.cloud_metadata import GCE, EC2, CloudFoundry, Azure
-from utils.logger import log_exceptions
+from utils.logger import log_exceptions, RedactedLogRecord
 from utils.jmx import JMXFiles
 from utils.platform import Platform, get_os
 from utils.subprocess_output import get_subprocess_output
 from utils.timer import Timer
 from utils.orchestrator import MetadataCollector
 
+logging.LogRecord = RedactedLogRecord
 log = logging.getLogger(__name__)
 
 
 FLUSH_LOGGING_PERIOD = 10
 FLUSH_LOGGING_INITIAL = 5
 DD_CHECK_TAG = 'dd_check:{0}'
+
+def a7_compatible_to_int(status):
+    if status == A7_COMPATIBILITY_READY:
+        return 1
+    return 0
 
 
 class AgentPayload(collections.MutableMapping):
@@ -471,11 +483,26 @@ class Collector(object):
                 meta = {'tags': ["check:%s" % check.name]}
                 metrics.append((metric, time.time(), check_run_time, meta))
 
+            if hasattr(check, A7_COMPATIBILITY_ATTR) and isinstance(getattr(check, A7_COMPATIBILITY_ATTR), str):
+                metric = 'datadog.agent.check_ready'
+                status = getattr(check, A7_COMPATIBILITY_ATTR)
+                meta = {'tags': ["check_name:%s" % check.name,
+                                 "agent_version_major:%s" % AGENT_VERSION.split(".")[0],
+                                 "agent_version_minor:%s" % AGENT_VERSION.split(".")[1],
+                                 "agent_version_patch:%s" % AGENT_VERSION.split(".")[2],
+                                 "status:%s" % status
+                                 ]}
+
+                # datadog.agent.check_ready:
+                # 0: is not compatible with A7 (or unknown)
+                # 1: is compatible with A7
+                metrics.append((metric, time.time(), a7_compatible_to_int(status), meta))
+
         for check_name, info in self.init_failed_checks_d.iteritems():
             if not self.continue_running:
                 return
             check_status = CheckStatus(check_name, None, None, None, None,
-                                       check_version=info.get('version'),
+                                       check_version=info.get('version', 'unknown'),
                                        init_failed_error=info['error'],
                                        init_failed_traceback=info['traceback'])
             check_statuses.append(check_status)
@@ -517,6 +544,20 @@ class Collector(object):
         emitter_statuses = payload.emit(log, self.agentConfig, self.emitters,
                                         self.continue_running)
         self.emit_duration = timer.step()
+
+        if self._is_first_run():
+            # This is not the exact payload sent to the backend as minor post
+            # processing is done, but this will give us a good idea of what is sent
+            # to the backend.
+            data = payload.payload # deep copy and merge of meta and metric data
+            data['apiKey'] = '*************************' + data.get('apiKey', '')[-5:]
+            # removing unused keys for the metadata payload
+            del data['metrics']
+            del data['events']
+            del data['service_checks']
+            if data.get('processes'):
+                data['processes']['apiKey'] = '*************************' + data['processes'].get('apiKey', '')[-5:]
+            log.debug("Metadata payload: %s", json.dumps(data))
 
         # Persist the status of the collection run.
         try:
@@ -649,6 +690,12 @@ class Collector(object):
             payload['systemStats'] = get_system_stats(
                 proc_path=self.agentConfig.get('procfs_path', '/proc').rstrip('/')
             )
+
+            if self.agentConfig['collect_orchestrator_tags']:
+                host_container_metadata = MetadataCollector().get_host_metadata()
+                if host_container_metadata:
+                    payload['container-meta'] = host_container_metadata
+
             payload['meta'] = self._get_hostname_metadata()
 
             self.hostname_metadata_cache = payload['meta']
@@ -799,7 +846,7 @@ class Collector(object):
 
     def _run_gohai(self, options):
         # Gohai is disabled on Mac for now
-        if Platform.is_mac():
+        if Platform.is_mac() or not self.agentConfig.get('enable_gohai'):
             return None
         output = None
         try:

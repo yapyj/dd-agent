@@ -36,6 +36,7 @@ import simplejson as json
 # DD imports
 from checks.check_status import CollectorStatus, DogstatsdStatus, ForwarderStatus
 from config import (
+    _is_affirmative,
     get_auto_confd_path,
     get_confd_path,
     get_config,
@@ -49,8 +50,13 @@ from utils.hostname import get_hostname
 from utils.jmx import jmx_command, JMXFiles
 from utils.platform import Platform
 from utils.sdk import load_manifest
-from utils.configcheck import configcheck, sd_configcheck
+from utils.configcheck import configcheck, sd_configcheck, agent_container_inspect
 from utils.windows_configuration import get_sdk_integration_paths
+
+from utils.logger import DisableLoggerInit
+with DisableLoggerInit():  # ensure the dogstatsd6 logger isn't started
+    from dogstatsd import Dogstatsd6
+
 # Globals
 log = logging.getLogger(__name__)
 
@@ -65,34 +71,40 @@ class Flare(object):
 
     CredentialPattern = namedtuple('CredentialPattern', ['pattern', 'replacement', 'label'])
     CHECK_CREDENTIALS = [
+        # We will parse either a yaml file, or a json.dumps of a config. For the latter, we
+        # need to account for the quote signs printed by the dump.
+        # For example, we can either get:
+        #   password: foo    # if we parse the yaml file
+        # or
+        #   "password": "foo"   # if we parse the json.dumps
         CredentialPattern(
-            re.compile('( *(\w|_)*pass(word)?:).+'),
+            re.compile('( *"?(\w|_)*pass(word)?"?:).+'),
             r'\1 ********',
             'password'
         ),
         CredentialPattern(
-            re.compile('( *(\w|_)*token:).+'),
+            re.compile('( *"?(\w|_)*token"?:).+'),
             r'\1 ********',
             'access token'
         ),
         CredentialPattern(
-            re.compile('(.*\ [A-Za-z0-9]+)\:\/\/([A-Za-z0-9_]+)\:(.+)\@'),
+            re.compile('(.*\ "?[A-Za-z0-9]+)\:\/\/([A-Za-z0-9_]+)\:(.+)\@'),
             r'\1://\2:********@',
             'password in a uri'
         ),
         CredentialPattern(
-            re.compile('^(\s*community_string:) *.+$'),
+            re.compile('(\s*"?community_string"?:).+'),
             r'\1 ********',
             'SNMP community string'
         ),
     ]
     MAIN_CREDENTIALS = [
         CredentialPattern(
-            re.compile('^\s*api_key:( *\w+(\w{5}) ?,?)+$'),
+            re.compile('^\s*api_key\s*[=, :]( *\w+(\w{5}) ?,?)+$'),
             lambda matchobj:  'api_key: ' + ', '.join(map(
                 lambda key: '*' * 26 + key[-5:],
                 map(lambda x: x.strip(),
-                    matchobj.string.split(':')[1].split(',')
+                    matchobj.string.split("api_key")[1].split(',')
                     )
             )),
             'api_key'
@@ -171,6 +183,15 @@ class Flare(object):
         self._permissions_file.close()
         self._add_file_tar(self._permissions_file.name, 'permissions.log',
                            log_permissions=False)
+
+        # Only add docker inspect if dockerized agent
+        if Platform.is_containerized():
+            self._add_command_output_tar('docker_inspect.log', agent_container_inspect)
+
+        # only add pdh data on Windows
+        if Platform.is_windows():
+            self._add_command_output_tar('counter_strings.log', self._reg_counter_strings)
+            self._add_command_output_tar('typeperf.log', self._typeperf_out)
 
     # Set the proxy settings, if they exist
     def set_proxy(self, options):
@@ -508,7 +529,8 @@ class Flare(object):
             temp_file.write(">>>> STDERR <<<<\n")
             temp_file.write(err.getvalue())
             err.close()
-        self._add_file_tar(temp_path, name, log_permissions=False)
+        temp_path2, log = self._strip_credentials(temp_path, self.CHECK_CREDENTIALS)
+        self._add_file_tar(temp_path2, name, log_permissions=False)
         os.remove(temp_path)
 
     # Capture the output of a command (from both std streams and loggers) and the
@@ -606,7 +628,13 @@ class Flare(object):
     # Print info of all agent components
     def _info_all(self):
         CollectorStatus.print_latest_status(verbose=True)
-        DogstatsdStatus.print_latest_status(verbose=True)
+        if not _is_affirmative(self._config.get('dogstatsd6_enable')):
+            DogstatsdStatus.print_latest_status(verbose=True)
+        else:
+            dsd6_status = Dogstatsd6._get_dsd6_stats(self._config)
+            if dsd6_status:
+                dsd6_status.render()
+
         ForwarderStatus.print_latest_status(verbose=True)
 
     # Call jmx_command with std streams redirection
@@ -630,6 +658,30 @@ class Flare(object):
             pip.main(['freeze', '--no-cache-dir'])
         except ImportError:
             print 'Unable to import pip'
+
+    def _reg_counter_strings(self):
+        try:
+            import _winreg
+            try:
+                val, t = _winreg.QueryValueEx(_winreg.HKEY_PERFORMANCE_DATA, "Counter 009")
+            except Exception as e:
+                print "unable to query counter strings: {0}".format(str(e))
+                return
+            idx = 0
+            idx_max = len(val)
+            while idx < idx_max:
+                print "%s" % val[idx]
+                idx += 1
+
+        except ImportError:
+            print 'Unable to import windows registry functions'
+
+    def _typeperf_out(self):
+        try:
+            self._print_output_command(['typeperf', '-qx'])
+        except OSError:
+            print 'Unable to execute typeperf'
+
 
     # Check if the file is not too big before upload
     def _check_size(self):
